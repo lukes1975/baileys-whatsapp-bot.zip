@@ -25,19 +25,24 @@ async function startBot() {
     printQRInTerminal: false
   });
 
-  sock.ev.on('connection.update', (update) => {
-    const { connection, qr } = update;
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
     if (qr) {
       io.emit('qr', qr);
-      qrcode.generate(qr, { small: true });
+      qrcode.generate(qr, { small: true }); // Show QR in terminal
     }
+    
     if (connection === 'open') {
       console.log('✅ WhatsApp connected');
       io.emit('connected');
     }
     if (connection === 'close') {
-      console.log('❌ Connection closed. Reconnecting...');
-      startBot();
+      const shouldReconnect =
+        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log('❌ Connection closed.', shouldReconnect ? 'Reconnecting...' : 'Logged out.');
+      if (shouldReconnect) {
+        startBot();
+      }
     }
   });
 
