@@ -20,14 +20,34 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
+
+const allowed = [
+  'http://localhost:5173',
+  'https://myproject.lovable.app',
+  'https://app.example.com'
+];
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // allow non-browser requests (Postman/server)
+    if (!origin) return cb(null, true);
+    if (allowed.includes(origin)) return cb(null, true);
+    return cb(new Error('CORS not allowed'), false);
+  },
+  methods: ['GET', 'POST']
+}));
+
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_ORIGIN || 'https://preview--vendora-whats.lovable.app',
-    methods: ['GET', 'POST'],
-  },
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (allowed.includes(origin)) return cb(null, true);
+      return cb(new Error('CORS not allowed'), false);
+    },
+    methods: ['GET', 'POST']
+  }
 });
 
-app.use(cors());
 app.use(express.json());
 
 /**
