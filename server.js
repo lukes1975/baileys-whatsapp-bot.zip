@@ -23,8 +23,8 @@ const server = http.createServer(app);
 
 const allowed = [
   'http://localhost:5173',
-  'https://myproject.lovable.app',
-  'https://app.example.com'
+  'https://vendora-whats.lovable.app/',
+  'https://preview--vendora-whats.lovable.app/'
 ];
 
 app.use(cors({
