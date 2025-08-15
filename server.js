@@ -21,18 +21,14 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-const allowed = [
-  'http://localhost:5173',
-  'https://vendora-whats.lovable.app/',
-  'https://preview--vendora-whats.lovable.app/'
-];
+const allowed = (process.env.FRONTEND_ORIGINS || 'http://localhost:5173,https://vendora-whats.lovable.app,https://preview--vendora-whats.lovable.app')
+  .split(',')
+  .map(s => s.trim().replace(/\/$/, '')); // remove trailing slash if any
 
 app.use(cors({
   origin: (origin, cb) => {
-    // allow non-browser requests (Postman/server)
     if (!origin) return cb(null, true);
-    if (allowed.includes(origin)) return cb(null, true);
-    return cb(new Error('CORS not allowed'), false);
+    cb(null, allowed.includes(origin));
   },
   methods: ['GET', 'POST']
 }));
@@ -112,12 +108,12 @@ async function startBot() {
         await saveCreds();
 
         // persist session JSON to Supabase (service role only)
-        // Note: upsert on store_id assumes a unique constraint or acceptable conflict behavior.
+        // Use explicit store id from env or fallback to SESSION_ID
         await supabase
           .from('wa_sessions')
           .upsert(
             {
-              store_id: STORE_ID,
+              store_id: process.env.STORE_ID || SESSION_ID,
               session_json: state,
               status: 'connected',
               updated_at: new Date().toISOString(),
@@ -233,7 +229,6 @@ async function startBot() {
         // Optional: store message envelope in Supabase for audit (lightweight)
         await supabase.from('wa_messages').insert([
           {
-            store_id: TENANT_ID,
             store_id: tenantId,
             chat_id: payload.chat_id,
             direction: 'inbound',
