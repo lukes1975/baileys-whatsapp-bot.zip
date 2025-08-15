@@ -21,7 +21,7 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-const allowed = (process.env.FRONTEND_ORIGINS || 'http://localhost:5173,https://vendora-whats.lovable.app,https://preview--vendora-whats.lovable.app')
+const allowed = (process.env.FRONTEND_ORIGINS || 'http://localhost:5173,https://vendora-whats.lovable.app,https://preview--vendora-whats.lovable.app,http://192.168.1.92:8080,http://localhost:8080')
   .split(',')
   .map(s => s.trim().replace(/\/$/, '')); // remove trailing slash if any
 
