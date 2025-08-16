@@ -27,8 +27,10 @@ const allowed = (process.env.FRONTEND_ORIGINS || 'http://localhost:5173,https://
 
 app.use(cors({
   origin: (origin, cb) => {
+    // allow server-to-server / Postman (no origin)
     if (!origin) return cb(null, true);
-    cb(null, allowed.includes(origin));
+    if (allowed.includes(origin)) return cb(null, true);
+    return cb(new Error('CORS not allowed'));
   },
   methods: ['GET', 'POST']
 }));
@@ -38,7 +40,7 @@ const io = new Server(server, {
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
       if (allowed.includes(origin)) return cb(null, true);
-      return cb(new Error('CORS not allowed'), false);
+      return cb(new Error('CORS not allowed'));
     },
     methods: ['GET', 'POST']
   }
@@ -82,6 +84,16 @@ const redis = new Redis({ url: UPSTASH_REST_URL, token: UPSTASH_REDIS_TOKEN });
 let sock = null;
 let latestQr = null; // latest QR string
 let savedState = null; // will hold `state` from useMultiFileAuthState when available
+
+// Add realtime in-memory connection state
+let connectionState = {
+  status: 'unknown',      // 'unknown' | 'connecting' | 'connected' | 'reconnecting' | 'logged_out'
+  isConnected: false,
+  isConnecting: false,
+  lastConnected: null,    // ISO timestamp
+  qrCode: null,
+  error: null,
+};
 
 /**
  * Start Baileys socket and wire events:
@@ -132,24 +144,56 @@ async function startBot() {
 
         if (qr) {
           latestQr = qr;
+          // update in-memory state
+          connectionState.qrCode = qr;
+          connectionState.isConnecting = true;
+          connectionState.isConnected = false;
+          connectionState.status = 'connecting';
+          connectionState.error = null;
+
           // Emit via socket.io for frontend
           io.emit('qr', qr);
           // Print to terminal
           qrcode.generate(qr, { small: true });
           // Store QR in Redis for frontend polling (TTL 300s)
           await redis.set(`wa:qr:${SESSION_ID}`, qr, { ex: 300 });
+
+          // reflect connecting state in Supabase
+          try {
+            await supabase
+              .from('wa_sessions')
+              .upsert(
+                {
+                  store_id: TENANT_ID,
+                  status: 'connecting',
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: ['store_id'] }
+              );
+          } catch (e) {
+            console.error('Error upserting connecting status to Supabase:', e);
+          }
         }
 
         if (connection === 'open') {
           console.log('✅ WhatsApp connected');
+          // update in-memory state
+          connectionState.isConnected = true;
+          connectionState.isConnecting = false;
+          connectionState.lastConnected = new Date().toISOString();
+          connectionState.qrCode = null;
+          connectionState.status = 'connected';
+          connectionState.error = null;
+
           io.emit('connected');
-          // mark session in DB
+          // mark session in DB and save phone if available
           await supabase
             .from('wa_sessions')
             .upsert(
               {
                 store_id: TENANT_ID,
                 status: 'connected',
+                phone: sock?.user?.id?.split(':')?.[0] || null,
                 updated_at: new Date().toISOString(),
               },
               { onConflict: ['store_id'] }
@@ -161,6 +205,14 @@ async function startBot() {
         if (connection === 'close') {
           const shouldReconnect =
             lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+
+          // update in-memory state
+          connectionState.isConnected = false;
+          connectionState.isConnecting = false;
+          connectionState.qrCode = null;
+          connectionState.status = shouldReconnect ? 'reconnecting' : 'logged_out';
+          connectionState.error = lastDisconnect?.error || null;
+
           console.log('❌ Connection closed.', shouldReconnect ? 'Reconnecting...' : 'Logged out.');
           // Update DB status
           await supabase
@@ -253,6 +305,8 @@ async function startBot() {
 // socket.io client connect
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
+  // send realtime connection state immediately
+  socket.emit('connection_state', connectionState);
   if (latestQr) socket.emit('qr', latestQr);
   // you can add auth for socket connections if desired
 });
@@ -327,6 +381,20 @@ app.get('/session/:id/qr', async (req, res) => {
 app.get('/session/:id/status', async (req, res) => {
   try {
     const id = req.params.id || TENANT_ID;
+
+    // Prefer in-memory realtime state if available
+    if (connectionState && connectionState.status !== 'unknown') {
+      return res.json({
+        status: connectionState.status,
+        isConnected: connectionState.isConnected,
+        isConnecting: connectionState.isConnecting,
+        lastConnected: connectionState.lastConnected,
+        qrCode: connectionState.qrCode,
+        error: connectionState.error,
+      });
+    }
+
+    // fallback to Supabase
     const { data, error } = await supabase
       .from('wa_sessions')
       .select('status, updated_at, store_id, phone')
@@ -335,7 +403,6 @@ app.get('/session/:id/status', async (req, res) => {
       .single();
 
     if (error && error.code !== 'PGRST116') {
-      // PGRST116 = no rows? supabase-javascript may return differently
       console.error('Supabase select error', error);
     }
 
