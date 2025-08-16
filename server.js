@@ -153,6 +153,8 @@ async function startBot() {
 
           // Emit via socket.io for frontend
           io.emit('qr', qr);
+          // emit full state so frontend stays in sync
+          io.emit('connection_state', connectionState);
           // Print to terminal
           qrcode.generate(qr, { small: true });
           // Store QR in Redis for frontend polling (TTL 300s)
@@ -186,6 +188,8 @@ async function startBot() {
           connectionState.error = null;
 
           io.emit('connected');
+          // emit full state so frontend stays in sync
+          io.emit('connection_state', connectionState);
           // mark session in DB and save phone if available
           await supabase
             .from('wa_sessions')
@@ -214,6 +218,8 @@ async function startBot() {
           connectionState.error = lastDisconnect?.error || null;
 
           console.log('❌ Connection closed.', shouldReconnect ? 'Reconnecting...' : 'Logged out.');
+          // emit full state so frontend stays in sync
+          io.emit('connection_state', connectionState);
           // Update DB status
           await supabase
             .from('wa_sessions')
